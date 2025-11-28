@@ -1,7 +1,23 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
+// Determine API URL - check env var first, then use production URL if on production domain
+const getApiUrl = () => {
+  // If env var is set, use it
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  
+  // If we're on the production domain, use production API
+  if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+    return 'https://kle-mentor-system-staging.onrender.com/api/v1';
+  }
+  
+  // Default to localhost for development
+  return 'http://localhost:5000/api/v1';
+};
+
+const API_URL = getApiUrl();
 
 console.log('API URL:', API_URL); // Debug log
 

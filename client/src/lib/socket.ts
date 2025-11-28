@@ -1,6 +1,19 @@
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+// Determine Socket URL - check env var first, then use production URL if on production domain
+const getSocketUrl = () => {
+  if (import.meta.env.VITE_SOCKET_URL) {
+    return import.meta.env.VITE_SOCKET_URL;
+  }
+  
+  if (typeof window !== 'undefined' && window.location.hostname.includes('vercel.app')) {
+    return 'https://kle-mentor-system-staging.onrender.com';
+  }
+  
+  return 'http://localhost:5000';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 console.log('Socket URL:', SOCKET_URL); // Debug log
 
