@@ -68,6 +68,15 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Cache control for API responses
+app.use('/api/', (req, res, next) => {
+  // Set cache headers for GET requests
+  if (req.method === 'GET') {
+    res.set('Cache-Control', 'private, max-age=0, must-revalidate');
+  }
+  next();
+});
+
 // Apply rate limiting to all API routes
 app.use('/api/', apiLimiter);
 

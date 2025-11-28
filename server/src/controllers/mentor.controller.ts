@@ -1,4 +1,5 @@
 import { Response } from 'express';
+import mongoose from 'mongoose';
 import { AuthRequest } from '../middleware/auth';
 import { catchAsync, AppError } from '../middleware/errorHandler';
 import User from '../models/User';
@@ -9,31 +10,58 @@ import Interaction from '../models/Interaction';
 import Log from '../models/Log';
 import Notification from '../models/Notification';
 
-// Get mentor dashboard
+// Get mentor dashboard - OPTIMIZED
 export const getMentorDashboard = catchAsync(async (req: AuthRequest, res: Response) => {
-  const groups = await Group.find({ mentor: req.user._id }).populate(
-    'mentees',
-    'profile.firstName profile.lastName usn avatar'
-  );
+  // Single query to get groups with mentees
+  const groups = await Group.find({ mentor: req.user._id })
+    .populate('mentees', 'profile.firstName profile.lastName usn avatar')
+    .lean();
+
+  if (groups.length === 0) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        groups: 0,
+        totalMentees: 0,
+        meetings: { total: 0, completed: 0 },
+        upcomingMeetings: [],
+        recentPosts: [],
+        menteeList: [],
+      },
+    });
+  }
 
   const groupIds = groups.map((g) => g._id);
-  const totalMentees = groups.reduce((acc, g) => acc + g.mentees.length, 0);
+  const totalMentees = groups.reduce((acc, g) => acc + (g.mentees?.length || 0), 0);
 
-  const [upcomingMeetings, recentPosts, totalMeetings, completedMeetings] = await Promise.all([
+  // Parallel queries with lean() for faster reads
+  const [upcomingMeetings, recentPosts, meetingStats] = await Promise.all([
     Meeting.find({
       groupId: { $in: groupIds },
       dateTime: { $gte: new Date() },
       status: 'scheduled',
     })
+      .select('title dateTime duration venue meetingType status')
       .sort({ dateTime: 1 })
-      .limit(5),
+      .limit(5)
+      .lean(),
     Post.find({ groupId: { $in: groupIds } })
+      .select('title content isPinned createdAt author')
       .sort({ createdAt: -1 })
       .limit(5)
-      .populate('author', 'profile.firstName profile.lastName avatar'),
-    Meeting.countDocuments({ groupId: { $in: groupIds } }),
-    Meeting.countDocuments({ groupId: { $in: groupIds }, status: 'completed' }),
+      .populate('author', 'profile.firstName profile.lastName avatar')
+      .lean(),
+    Meeting.aggregate([
+      { $match: { groupId: { $in: groupIds } } },
+      { $group: { 
+        _id: null, 
+        total: { $sum: 1 }, 
+        completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } } 
+      }}
+    ]),
   ]);
+
+  const stats = meetingStats[0] || { total: 0, completed: 0 };
 
   res.status(200).json({
     success: true,
@@ -41,21 +69,22 @@ export const getMentorDashboard = catchAsync(async (req: AuthRequest, res: Respo
       groups: groups.length,
       totalMentees,
       meetings: {
-        total: totalMeetings,
-        completed: completedMeetings,
+        total: stats.total,
+        completed: stats.completed,
       },
       upcomingMeetings,
       recentPosts,
-      menteeList: groups.flatMap((g) => g.mentees),
+      menteeList: groups.flatMap((g) => g.mentees || []),
     },
   });
 });
 
-// Get mentor's groups
+// Get mentor's groups - OPTIMIZED
 export const getMyGroups = catchAsync(async (req: AuthRequest, res: Response) => {
   const groups = await Group.find({ mentor: req.user._id })
     .populate('mentees', 'profile.firstName profile.lastName usn avatar email status')
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
   res.status(200).json({
     success: true,
@@ -63,33 +92,41 @@ export const getMyGroups = catchAsync(async (req: AuthRequest, res: Response) =>
   });
 });
 
-// Get single group details
+// Get single group details - OPTIMIZED
 export const getGroupDetails = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
+  const groupObjectId = new mongoose.Types.ObjectId(id);
 
-  const group = await Group.findOne({ _id: id, mentor: req.user._id })
-    .populate('mentees', 'profile.firstName profile.lastName usn avatar email phone status');
+  const [group, meetingStats, totalPosts] = await Promise.all([
+    Group.findOne({ _id: id, mentor: req.user._id })
+      .populate('mentees', 'profile.firstName profile.lastName usn avatar email phone status')
+      .lean(),
+    Meeting.aggregate([
+      { $match: { groupId: groupObjectId } },
+      { $group: { 
+        _id: null, 
+        total: { $sum: 1 }, 
+        completed: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] } } 
+      }}
+    ]),
+    Post.countDocuments({ groupId: id }),
+  ]);
 
   if (!group) {
     throw new AppError('Group not found', 404);
   }
 
-  // Get group statistics
-  const [totalMeetings, completedMeetings, totalPosts] = await Promise.all([
-    Meeting.countDocuments({ groupId: id }),
-    Meeting.countDocuments({ groupId: id, status: 'completed' }),
-    Post.countDocuments({ groupId: id }),
-  ]);
+  const stats = meetingStats[0] || { total: 0, completed: 0 };
 
   res.status(200).json({
     success: true,
     data: {
       group,
       stats: {
-        totalMeetings,
-        completedMeetings,
+        totalMeetings: stats.total,
+        completedMeetings: stats.completed,
         totalPosts,
-        totalMentees: group.mentees.length,
+        totalMentees: group.mentees?.length || 0,
       },
     },
   });

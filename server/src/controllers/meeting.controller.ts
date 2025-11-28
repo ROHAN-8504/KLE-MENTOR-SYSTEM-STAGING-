@@ -8,36 +8,74 @@ import Log from '../models/Log';
 import { sendEmail } from '../utils/email';
 import { emitNotification } from '../socket';
 
-// Get meetings (filtered by role)
+// Simple in-memory cache for user's group IDs (expires after 5 minutes)
+const groupCache = new Map<string, { groupIds: string[], expiry: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+const getCachedGroupIds = async (userId: string, role: string): Promise<string[]> => {
+  const cacheKey = `${userId}_${role}`;
+  const cached = groupCache.get(cacheKey);
+  
+  if (cached && cached.expiry > Date.now()) {
+    return cached.groupIds;
+  }
+  
+  // Fetch from DB with lean() for faster query
+  const groups = await Group.find({
+    $or: [{ mentor: userId }, { mentees: userId }],
+  }).select('_id').lean();
+  
+  const groupIds = groups.map((g) => g._id.toString());
+  groupCache.set(cacheKey, { groupIds, expiry: Date.now() + CACHE_TTL });
+  
+  return groupIds;
+};
+
+// Clear cache when groups change
+export const clearGroupCache = (userId: string) => {
+  for (const key of groupCache.keys()) {
+    if (key.startsWith(userId)) {
+      groupCache.delete(key);
+    }
+  }
+};
+
+// Get meetings (filtered by role) - OPTIMIZED
 export const getMeetings = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50); // Cap at 50
   const skip = (page - 1) * limit;
   const { status, groupId } = req.query;
 
   let query: any = {};
 
   if (req.user.role === 'admin') {
-    // Admin can see all meetings
     if (groupId) query.groupId = groupId;
   } else {
-    // Mentors/Students see only their group meetings
-    const groups = await Group.find({
-      $or: [{ mentor: req.user._id }, { mentees: req.user._id }],
-    });
-    const groupIds = groups.map((g) => g._id);
+    // Use cached group IDs
+    const groupIds = await getCachedGroupIds(req.user._id.toString(), req.user.role);
+    if (groupIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+      });
+    }
     query.groupId = { $in: groupIds };
   }
 
-  if (status) query.status = status;
+  if (status && status !== 'all') query.status = status;
 
+  // Use lean() for faster reads and parallel execution
   const [meetings, total] = await Promise.all([
     Meeting.find(query)
+      .select('title description dateTime duration venue meetingType meetingLink status groupId scheduledBy attendance createdAt')
       .populate('groupId', 'name')
       .populate('scheduledBy', 'profile.firstName profile.lastName')
       .sort({ dateTime: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Meeting.countDocuments(query),
   ]);
 
@@ -53,174 +91,144 @@ export const getMeetings = catchAsync(async (req: AuthRequest, res: Response) =>
   });
 });
 
-// Create meeting
+// Create meeting - OPTIMIZED
 export const createMeeting = catchAsync(async (req: AuthRequest, res: Response) => {
   const { title, description, dateTime, duration, venue, groupId, meetingType, meetingLink } = req.body;
 
-  console.log('📅 Creating meeting with data:', { title, dateTime, duration, groupId, meetingType, venue, meetingLink });
+  // Validate required fields (fast fail)
+  if (!title?.trim()) throw new AppError('Meeting title is required', 400);
+  if (!groupId) throw new AppError('Group ID is required', 400);
+  if (!dateTime) throw new AppError('Date and time is required', 400);
 
-  // Validate required fields
-  if (!title || !title.trim()) {
-    throw new AppError('Meeting title is required', 400);
-  }
-
-  if (!groupId) {
-    throw new AppError('Group ID is required', 400);
-  }
-
-  if (!dateTime) {
-    throw new AppError('Date and time is required', 400);
-  }
-
-  // Validate dateTime is in the future
   const meetingDate = new Date(dateTime);
   const now = new Date();
   
-  console.log('📅 Date validation:', { meetingDate, now, isValid: !isNaN(meetingDate.getTime()) });
-  
-  if (isNaN(meetingDate.getTime())) {
-    throw new AppError('Invalid date format', 400);
-  }
-  
-  if (meetingDate <= now) {
-    throw new AppError('Meeting date and time must be in the future', 400);
-  }
+  if (isNaN(meetingDate.getTime())) throw new AppError('Invalid date format', 400);
+  if (meetingDate <= now) throw new AppError('Meeting date and time must be in the future', 400);
 
-  // Validate date is not too far in the future (1 year max)
   const maxDate = new Date();
   maxDate.setFullYear(maxDate.getFullYear() + 1);
-  
-  if (meetingDate > maxDate) {
-    throw new AppError('Meeting cannot be scheduled more than 1 year in advance', 400);
-  }
+  if (meetingDate > maxDate) throw new AppError('Meeting cannot be scheduled more than 1 year in advance', 400);
 
-  // Validate duration
   if (duration && (duration < 5 || duration > 480)) {
     throw new AppError('Meeting duration must be between 5 and 480 minutes', 400);
   }
 
-  // Verify mentor owns the group
+  // Verify mentor owns the group - use lean for faster read
   const group = await Group.findOne({
     _id: groupId,
     mentor: req.user._id,
-  }).populate('mentees', 'profile.firstName profile.lastName email');
+  }).populate('mentees', 'profile.firstName profile.lastName email').lean();
 
-  console.log('📅 Group found:', group ? group.name : 'NOT FOUND');
-
-  if (!group) {
-    throw new AppError('Group not found or you are not the mentor', 404);
-  }
+  if (!group) throw new AppError('Group not found or you are not the mentor', 404);
 
   // Normalize meeting type
   const normalizedMeetingType = meetingType === 'offline' ? 'in-person' : (meetingType || 'online');
 
   const meeting = await Meeting.create({
-    title,
-    description,
+    title: title.trim(),
+    description: description?.trim(),
     dateTime: meetingDate,
     duration: duration || 30,
-    venue,
+    venue: venue?.trim(),
     groupId,
     meetingType: normalizedMeetingType,
-    meetingLink,
+    meetingLink: meetingLink?.trim(),
     scheduledBy: req.user._id,
   });
 
-  console.log('📅 Meeting created successfully:', meeting._id);
+  // Clear group cache for all mentees
+  clearGroupCache(req.user._id.toString());
 
-  await meeting.populate([
-    { path: 'groupId', select: 'name' },
-    { path: 'scheduledBy', select: 'profile.firstName profile.lastName' },
-  ]);
-
-  // Handle notifications in try-catch to prevent failure of main operation
-  try {
-    // Create notification for all mentees
-    if (group.mentees && group.mentees.length > 0) {
-      await Notification.create({
-        type: 'MEETING_SCHEDULED',
-        creator: req.user._id,
-        content: meeting._id,
-        contentModel: 'Meeting',
-        message: `A new meeting "${title}" has been scheduled for ${meetingDate.toLocaleDateString()}`,
-        receivers: (group.mentees as any[]).map((mentee) => ({ user: mentee._id, read: false })),
-      });
-      console.log('📅 Notifications created for mentees');
-    }
-
-    // Send email notifications
-    const menteeEmails = (group.mentees as any[]).map((m) => m.email).filter(Boolean);
-    if (menteeEmails.length > 0) {
-      await sendEmail({
-        to: menteeEmails,
-        subject: `New Meeting: ${title}`,
-        html: `
-          <h2>New Meeting Scheduled</h2>
-          <p><strong>Title:</strong> ${title}</p>
-          <p><strong>Date:</strong> ${meetingDate.toLocaleString()}</p>
-          <p><strong>Duration:</strong> ${duration || 30} minutes</p>
-          <p><strong>Venue:</strong> ${venue || meetingLink || 'TBD'}</p>
-          ${description ? `<p><strong>Description:</strong> ${description}</p>` : ''}
-        `,
-      });
-    }
-
-    // Emit real-time notifications to all mentees
-    const menteeIds = (group.mentees as any[]).map((m) => m._id.toString());
-    emitNotification(menteeIds, {
-      type: 'MEETING_SCHEDULED',
-      title: 'New Meeting Scheduled',
-      message: `A new meeting "${title}" has been scheduled`,
-      content: meeting._id,
-      createdAt: new Date(),
-    });
-  } catch (notificationError) {
-    console.error('📅 Failed to send notifications:', notificationError);
-    // Don't throw - meeting was created successfully
-  }
-
-  // Log activity (non-blocking)
-  try {
-    await Log.create({
-      user: req.user._id,
-      eventType: 'MEETING_CREATED',
-      entityType: 'Meeting',
-      entityId: meeting._id,
-      eventDetail: `Created meeting: ${title}`,
-      metadata: { groupId, dateTime: meetingDate },
-    });
-  } catch (logError) {
-    console.error('📅 Failed to log activity:', logError);
-  }
-
+  // Send response immediately - don't wait for notifications
   res.status(201).json({
     success: true,
     message: 'Meeting created successfully',
-    data: meeting,
+    data: {
+      ...meeting.toObject(),
+      groupId: { _id: group._id, name: group.name },
+      scheduledBy: { _id: req.user._id, profile: req.user.profile },
+    },
+  });
+
+  // Handle notifications asynchronously (non-blocking)
+  setImmediate(async () => {
+    try {
+      if (group.mentees && group.mentees.length > 0) {
+        const mentees = group.mentees as any[];
+        
+        // Create notification
+        await Notification.create({
+          type: 'MEETING_SCHEDULED',
+          creator: req.user._id,
+          content: meeting._id,
+          contentModel: 'Meeting',
+          message: `A new meeting "${title}" has been scheduled for ${meetingDate.toLocaleDateString()}`,
+          receivers: mentees.map((mentee) => ({ user: mentee._id, read: false })),
+        });
+
+        // Emit real-time notifications
+        const menteeIds = mentees.map((m) => m._id.toString());
+        emitNotification(menteeIds, {
+          type: 'MEETING_SCHEDULED',
+          title: 'New Meeting Scheduled',
+          message: `A new meeting "${title}" has been scheduled`,
+          content: meeting._id,
+          createdAt: new Date(),
+        });
+
+        // Send email (async, don't await)
+        const menteeEmails = mentees.map((m) => m.email).filter(Boolean);
+        if (menteeEmails.length > 0) {
+          sendEmail({
+            to: menteeEmails,
+            subject: `New Meeting: ${title}`,
+            html: `
+              <h2>New Meeting Scheduled</h2>
+              <p><strong>Title:</strong> ${title}</p>
+              <p><strong>Date:</strong> ${meetingDate.toLocaleString()}</p>
+              <p><strong>Duration:</strong> ${duration || 30} minutes</p>
+              <p><strong>Venue:</strong> ${venue || meetingLink || 'TBD'}</p>
+              ${description ? `<p><strong>Description:</strong> ${description}</p>` : ''}
+            `,
+          }).catch(console.error);
+        }
+      }
+
+      // Log activity
+      Log.create({
+        user: req.user._id,
+        eventType: 'MEETING_CREATED',
+        entityType: 'Meeting',
+        entityId: meeting._id,
+        eventDetail: `Created meeting: ${title}`,
+        metadata: { groupId, dateTime: meetingDate },
+      }).catch(console.error);
+    } catch (error) {
+      console.error('Background notification error:', error);
+    }
   });
 });
 
-// Get single meeting
+// Get single meeting - OPTIMIZED
 export const getMeeting = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
   const meeting = await Meeting.findById(id)
-    .populate('groupId', 'name')
+    .populate('groupId', 'name mentor mentees')
     .populate('scheduledBy', 'profile.firstName profile.lastName')
-    .populate('attendance.student', 'profile.firstName profile.lastName usn');
+    .populate('attendance.student', 'profile.firstName profile.lastName usn')
+    .lean();
 
-  if (!meeting) {
-    throw new AppError('Meeting not found', 404);
-  }
+  if (!meeting) throw new AppError('Meeting not found', 404);
 
-  // Verify access
+  // Verify access using populated data (no extra query needed)
   if (req.user.role !== 'admin') {
-    const group = await Group.findOne({
-      _id: meeting.groupId,
-      $or: [{ mentor: req.user._id }, { mentees: req.user._id }],
-    });
-
-    if (!group) {
+    const group = meeting.groupId as any;
+    const isMentor = group.mentor?.toString() === req.user._id.toString();
+    const isMentee = group.mentees?.some((m: any) => m.toString() === req.user._id.toString());
+    
+    if (!isMentor && !isMentee) {
       throw new AppError('Access denied', 403);
     }
   }
