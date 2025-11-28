@@ -57,6 +57,8 @@ export const getMeetings = catchAsync(async (req: AuthRequest, res: Response) =>
 export const createMeeting = catchAsync(async (req: AuthRequest, res: Response) => {
   const { title, description, dateTime, duration, venue, groupId, meetingType, meetingLink } = req.body;
 
+  console.log('📅 Creating meeting with data:', { title, dateTime, duration, groupId, meetingType, venue, meetingLink });
+
   // Validate required fields
   if (!title || !title.trim()) {
     throw new AppError('Meeting title is required', 400);
@@ -73,6 +75,8 @@ export const createMeeting = catchAsync(async (req: AuthRequest, res: Response) 
   // Validate dateTime is in the future
   const meetingDate = new Date(dateTime);
   const now = new Date();
+  
+  console.log('📅 Date validation:', { meetingDate, now, isValid: !isNaN(meetingDate.getTime()) });
   
   if (isNaN(meetingDate.getTime())) {
     throw new AppError('Invalid date format', 400);
@@ -101,75 +105,93 @@ export const createMeeting = catchAsync(async (req: AuthRequest, res: Response) 
     mentor: req.user._id,
   }).populate('mentees', 'profile.firstName profile.lastName email');
 
+  console.log('📅 Group found:', group ? group.name : 'NOT FOUND');
+
   if (!group) {
     throw new AppError('Group not found or you are not the mentor', 404);
   }
 
+  // Normalize meeting type
+  const normalizedMeetingType = meetingType === 'offline' ? 'in-person' : (meetingType || 'online');
+
   const meeting = await Meeting.create({
     title,
     description,
-    dateTime,
-    duration,
+    dateTime: meetingDate,
+    duration: duration || 30,
     venue,
     groupId,
-    meetingType: meetingType || 'in-person',
+    meetingType: normalizedMeetingType,
     meetingLink,
     scheduledBy: req.user._id,
   });
+
+  console.log('📅 Meeting created successfully:', meeting._id);
 
   await meeting.populate([
     { path: 'groupId', select: 'name' },
     { path: 'scheduledBy', select: 'profile.firstName profile.lastName' },
   ]);
 
-  // Create notification for all mentees
-  if (group.mentees.length > 0) {
-    await Notification.create({
+  // Handle notifications in try-catch to prevent failure of main operation
+  try {
+    // Create notification for all mentees
+    if (group.mentees && group.mentees.length > 0) {
+      await Notification.create({
+        type: 'MEETING_SCHEDULED',
+        creator: req.user._id,
+        content: meeting._id,
+        contentModel: 'Meeting',
+        message: `A new meeting "${title}" has been scheduled for ${meetingDate.toLocaleDateString()}`,
+        receivers: (group.mentees as any[]).map((mentee) => ({ user: mentee._id, read: false })),
+      });
+      console.log('📅 Notifications created for mentees');
+    }
+
+    // Send email notifications
+    const menteeEmails = (group.mentees as any[]).map((m) => m.email).filter(Boolean);
+    if (menteeEmails.length > 0) {
+      await sendEmail({
+        to: menteeEmails,
+        subject: `New Meeting: ${title}`,
+        html: `
+          <h2>New Meeting Scheduled</h2>
+          <p><strong>Title:</strong> ${title}</p>
+          <p><strong>Date:</strong> ${meetingDate.toLocaleString()}</p>
+          <p><strong>Duration:</strong> ${duration || 30} minutes</p>
+          <p><strong>Venue:</strong> ${venue || meetingLink || 'TBD'}</p>
+          ${description ? `<p><strong>Description:</strong> ${description}</p>` : ''}
+        `,
+      });
+    }
+
+    // Emit real-time notifications to all mentees
+    const menteeIds = (group.mentees as any[]).map((m) => m._id.toString());
+    emitNotification(menteeIds, {
       type: 'MEETING_SCHEDULED',
-      creator: req.user._id,
+      title: 'New Meeting Scheduled',
+      message: `A new meeting "${title}" has been scheduled`,
       content: meeting._id,
-      contentModel: 'Meeting',
-      message: `A new meeting "${title}" has been scheduled for ${new Date(dateTime).toLocaleDateString()}`,
-      receivers: (group.mentees as any[]).map((mentee) => ({ user: mentee._id, read: false })),
+      createdAt: new Date(),
     });
+  } catch (notificationError) {
+    console.error('📅 Failed to send notifications:', notificationError);
+    // Don't throw - meeting was created successfully
   }
 
-  // Send email notifications
-  const menteeEmails = (group.mentees as any[]).map((m) => m.email).filter(Boolean);
-  if (menteeEmails.length > 0) {
-    await sendEmail({
-      to: menteeEmails,
-      subject: `New Meeting: ${title}`,
-      html: `
-        <h2>New Meeting Scheduled</h2>
-        <p><strong>Title:</strong> ${title}</p>
-        <p><strong>Date:</strong> ${new Date(dateTime).toLocaleString()}</p>
-        <p><strong>Duration:</strong> ${duration} minutes</p>
-        <p><strong>Venue:</strong> ${venue || meetingLink || 'TBD'}</p>
-        ${description ? `<p><strong>Description:</strong> ${description}</p>` : ''}
-      `,
+  // Log activity (non-blocking)
+  try {
+    await Log.create({
+      user: req.user._id,
+      eventType: 'MEETING_CREATED',
+      entityType: 'Meeting',
+      entityId: meeting._id,
+      eventDetail: `Created meeting: ${title}`,
+      metadata: { groupId, dateTime: meetingDate },
     });
+  } catch (logError) {
+    console.error('📅 Failed to log activity:', logError);
   }
-
-  // Emit real-time notifications to all mentees
-  const menteeIds = (group.mentees as any[]).map((m) => m._id.toString());
-  emitNotification(menteeIds, {
-    type: 'MEETING_SCHEDULED',
-    title: 'New Meeting Scheduled',
-    message: `A new meeting "${title}" has been scheduled`,
-    content: meeting._id,
-    createdAt: new Date(),
-  });
-
-  // Log activity
-  await Log.create({
-    user: req.user._id,
-    eventType: 'MEETING_CREATED',
-    entityType: 'Meeting',
-    entityId: meeting._id,
-    eventDetail: `Created meeting: ${title}`,
-    metadata: { groupId, dateTime },
-  });
 
   res.status(201).json({
     success: true,

@@ -144,12 +144,16 @@ export const MeetingsPage: React.FC = () => {
 
     try {
       setCreating(true);
+      
+      // Map 'offline' to 'in-person' for backend compatibility
+      const meetingTypeForBackend = newMeeting.meetingType === 'offline' ? 'in-person' : newMeeting.meetingType;
+      
       await meetingAPI.createMeeting({
         title: newMeeting.title,
         description: newMeeting.description,
         dateTime: newMeeting.dateTime,
         duration: newMeeting.duration,
-        meetingType: newMeeting.meetingType,
+        meetingType: meetingTypeForBackend,
         venue: newMeeting.location,
         meetingLink: newMeeting.meetLink,
         groupId: newMeeting.groupId,
@@ -165,9 +169,14 @@ export const MeetingsPage: React.FC = () => {
         meetLink: '',
         groupId: groups.length > 0 ? groups[0]._id : '',
       });
+      setFormError(null);
       fetchMeetings();
     } catch (error) {
       console.error('Failed to create meeting:', error);
+      // Extract and display the error message from the server
+      const err = error as { response?: { data?: { message?: string } }; message?: string };
+      const errorMessage = err?.response?.data?.message || err?.message || 'Failed to create meeting. Please try again.';
+      setFormError(errorMessage);
     } finally {
       setCreating(false);
     }
