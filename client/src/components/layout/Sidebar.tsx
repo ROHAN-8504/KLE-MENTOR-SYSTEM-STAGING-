@@ -15,9 +15,10 @@ import {
   ClipboardList,
   BarChart,
   Shield,
+  X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { sidebarOpenState, userState } from '../../store/atoms';
+import { sidebarOpenState, mobileSidebarOpenState, userState } from '../../store/atoms';
 import { Avatar } from '../ui/Avatar';
 import { getFullName } from '../../lib/utils';
 
@@ -65,6 +66,7 @@ export const Sidebar: React.FC = () => {
   const { signOut } = useClerk();
   const user = useRecoilValue(userState);
   const [isOpen, setIsOpen] = useRecoilState(sidebarOpenState);
+  const [isMobileOpen, setIsMobileOpen] = useRecoilState(mobileSidebarOpenState);
 
   const navItems = user?.role === 'admin'
     ? adminNavItems
@@ -77,91 +79,123 @@ export const Sidebar: React.FC = () => {
     navigate('/');
   };
 
+  const handleNavClick = () => {
+    // Close mobile sidebar on navigation
+    if (isMobileOpen) {
+      setIsMobileOpen(false);
+    }
+  };
+
   return (
-    <aside
-      className={cn(
-        'fixed left-0 top-0 z-40 h-screen bg-card border-r transition-all duration-300',
-        isOpen ? 'w-64' : 'w-20'
+    <>
+      {/* Mobile Overlay */}
+      {isMobileOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={() => setIsMobileOpen(false)}
+        />
       )}
-    >
-      <div className="flex h-full flex-col">
-        {/* Header */}
-        <div className="flex h-16 items-center justify-between border-b px-4">
-          {isOpen && (
-            <Link to="/" className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-                <span className="text-primary-foreground font-bold text-lg">K</span>
-              </div>
-              <span className="font-semibold text-lg">KLE Mentor</span>
-            </Link>
-          )}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-          >
-            <ChevronLeft className={cn('h-5 w-5 transition-transform', !isOpen && 'rotate-180')} />
-          </button>
-        </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 space-y-1 px-3 py-4 overflow-y-auto">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.href;
-            return (
-              <Link
-                key={item.href}
-                to={item.href}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary hover:bg-primary/10',
-                  isActive && 'bg-primary/10 text-primary font-medium'
-                )}
-              >
-                <item.icon className="h-5 w-5 shrink-0" />
-                {isOpen && <span>{item.title}</span>}
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          'fixed left-0 top-0 z-50 h-screen bg-card border-r transition-all duration-300',
+          // Desktop behavior
+          'hidden lg:block',
+          isOpen ? 'lg:w-64' : 'lg:w-20',
+          // Mobile behavior - slide in from left
+          isMobileOpen && 'block w-72'
+        )}
+      >
+        <div className="flex h-full flex-col">
+          {/* Header */}
+          <div className="flex h-16 items-center justify-between border-b px-4">
+            {(isOpen || isMobileOpen) && (
+              <Link to="/" className="flex items-center gap-2" onClick={handleNavClick}>
+                <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
+                  <span className="text-primary-foreground font-bold text-lg">K</span>
+                </div>
+                <span className="font-semibold text-lg">KLE Mentor</span>
               </Link>
-            );
-          })}
-        </nav>
-
-        {/* Footer */}
-        <div className="border-t p-4">
-          <Link
-            to="/settings"
-            className={cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary hover:bg-primary/10 mb-2',
-              location.pathname === '/settings' && 'bg-primary/10 text-primary'
             )}
-          >
-            <Settings className="h-5 w-5 shrink-0" />
-            {isOpen && <span>Settings</span>}
-          </Link>
-          
-          <button
-            onClick={handleSignOut}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-destructive hover:bg-destructive/10"
-          >
-            <LogOut className="h-5 w-5 shrink-0" />
-            {isOpen && <span>Sign Out</span>}
-          </button>
+            {/* Desktop collapse button */}
+            <button
+              onClick={() => setIsOpen(!isOpen)}
+              className="hidden lg:block p-2 rounded-lg hover:bg-accent transition-colors"
+            >
+              <ChevronLeft className={cn('h-5 w-5 transition-transform', !isOpen && 'rotate-180')} />
+            </button>
+            {/* Mobile close button */}
+            <button
+              onClick={() => setIsMobileOpen(false)}
+              className="lg:hidden p-2 rounded-lg hover:bg-accent transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
 
-          {isOpen && user && (
-            <div className="mt-4 flex items-center gap-3 rounded-lg bg-muted/50 p-3">
-              <Avatar
-                src={user.avatar}
-                firstName={user.profile.firstName}
-                lastName={user.profile.lastName}
-                size="sm"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">
-                  {getFullName(user.profile.firstName, user.profile.lastName)}
-                </p>
-                <p className="text-xs text-muted-foreground capitalize">{user.role}</p>
+          {/* Navigation */}
+          <nav className="flex-1 space-y-1 px-3 py-4 overflow-y-auto">
+            {navItems.map((item) => {
+              const isActive = location.pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  onClick={handleNavClick}
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-muted-foreground transition-all hover:text-primary hover:bg-primary/10',
+                    isActive && 'bg-primary/10 text-primary font-medium'
+                  )}
+                >
+                  <item.icon className="h-5 w-5 shrink-0" />
+                  {(isOpen || isMobileOpen) && <span>{item.title}</span>}
+                </Link>
+              );
+            })}
+          </nav>
+
+          {/* Footer */}
+          <div className="border-t p-4">
+            <Link
+              to={`/${user?.role}/profile`}
+              onClick={handleNavClick}
+              className={cn(
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-primary hover:bg-primary/10 mb-2',
+                location.pathname.includes('/profile') && 'bg-primary/10 text-primary'
+              )}
+            >
+              <Settings className="h-5 w-5 shrink-0" />
+              {(isOpen || isMobileOpen) && <span>Profile</span>}
+            </Link>
+            
+            <button
+              onClick={handleSignOut}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-muted-foreground transition-all hover:text-destructive hover:bg-destructive/10"
+            >
+              <LogOut className="h-5 w-5 shrink-0" />
+              {(isOpen || isMobileOpen) && <span>Sign Out</span>}
+            </button>
+
+            {(isOpen || isMobileOpen) && user && (
+              <div className="mt-4 flex items-center gap-3 rounded-lg bg-muted/50 p-3">
+                <Avatar
+                  src={user.avatar}
+                  firstName={user.profile.firstName}
+                  lastName={user.profile.lastName}
+                  size="sm"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">
+                    {getFullName(user.profile.firstName, user.profile.lastName)}
+                  </p>
+                  <p className="text-xs text-muted-foreground capitalize">{user.role}</p>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
-    </aside>
+      </aside>
+    </>
   );
 };

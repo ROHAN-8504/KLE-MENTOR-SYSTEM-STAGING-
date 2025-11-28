@@ -24,10 +24,14 @@ export const Header: React.FC = () => {
     <header
       className={cn(
         'fixed top-0 right-0 z-30 flex h-16 items-center justify-between border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-4 transition-all',
-        sidebarOpen ? 'left-64' : 'left-20'
+        // Desktop: adjust left position based on sidebar state
+        'lg:left-20',
+        sidebarOpen && 'lg:left-64',
+        // Mobile: full width
+        'left-0'
       )}
     >
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 md:gap-4">
         {/* Mobile menu button */}
         <button
           onClick={() => setMobileSidebarOpen(true)}
@@ -36,20 +40,28 @@ export const Header: React.FC = () => {
           <Menu className="h-5 w-5" />
         </button>
 
-        {/* Search */}
+        {/* Logo for mobile */}
+        <Link to="/" className="lg:hidden flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
+            <span className="text-primary-foreground font-bold text-lg">K</span>
+          </div>
+          <span className="font-semibold text-base hidden xs:inline">KLE Mentor</span>
+        </Link>
+
+        {/* Search - hidden on mobile */}
         <div className="hidden md:flex items-center">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="search"
               placeholder="Search..."
-              className="h-9 w-64 rounded-md border border-input bg-background pl-10 pr-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-9 w-48 lg:w-64 rounded-md border border-input bg-background pl-10 pr-4 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1 md:gap-2">
         {/* Theme toggle */}
         <Button
           variant="ghost"
@@ -76,10 +88,10 @@ export const Header: React.FC = () => {
               )}
             </Button>
           }
-          className="w-80"
+          className="w-72 md:w-80"
         >
           <div className="flex items-center justify-between px-2 py-1.5">
-            <span className="font-semibold">Notifications</span>
+            <span className="font-semibold text-sm">Notifications</span>
             {unreadCount > 0 && (
               <button
                 onClick={markAllAsRead}
@@ -135,7 +147,7 @@ export const Header: React.FC = () => {
           afterSignOutUrl="/"
           appearance={{
             elements: {
-              avatarBox: 'h-9 w-9',
+              avatarBox: 'h-8 w-8 md:h-9 md:w-9',
             },
           }}
         />

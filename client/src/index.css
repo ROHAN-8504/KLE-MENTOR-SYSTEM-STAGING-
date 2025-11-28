@@ -56,6 +56,11 @@
   body {
     @apply bg-background text-foreground;
   }
+  
+  /* Prevent horizontal overflow on mobile */
+  html, body {
+    overflow-x: hidden;
+  }
 }
 
 @layer components {
@@ -98,6 +103,56 @@
   .sidebar-link-active {
     @apply bg-primary/10 text-primary;
   }
+  
+  /* Responsive grid utilities */
+  .dashboard-grid {
+    @apply grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4;
+  }
+  
+  .stat-grid {
+    @apply grid gap-4 grid-cols-2 md:grid-cols-4;
+  }
+  
+  /* Mobile-friendly table wrapper */
+  .table-wrapper {
+    @apply overflow-x-auto -mx-4 px-4 md:mx-0 md:px-0;
+  }
+  
+  /* Responsive text */
+  .text-responsive-sm {
+    @apply text-xs sm:text-sm;
+  }
+  
+  .text-responsive-base {
+    @apply text-sm sm:text-base;
+  }
+  
+  .text-responsive-lg {
+    @apply text-base sm:text-lg md:text-xl;
+  }
+  
+  .text-responsive-xl {
+    @apply text-lg sm:text-xl md:text-2xl;
+  }
+  
+  /* Mobile-friendly cards */
+  .card-responsive {
+    @apply p-3 sm:p-4 md:p-6;
+  }
+  
+  /* Form responsive */
+  .form-grid {
+    @apply grid gap-4 grid-cols-1 md:grid-cols-2;
+  }
+  
+  /* Action buttons for mobile */
+  .action-buttons {
+    @apply flex flex-col sm:flex-row gap-2;
+  }
+  
+  .action-buttons > * {
+    @apply w-full sm:w-auto;
+  }
 }
 
 /* Custom scrollbar */
@@ -118,6 +173,14 @@
 
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Hide scrollbar on mobile for better experience */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
 }
 
 /* Loading spinner */
@@ -143,4 +206,33 @@ input[type="time"]::-webkit-calendar-picker-indicator {
 .dark input[type="date"]::-webkit-calendar-picker-indicator,
 .dark input[type="time"]::-webkit-calendar-picker-indicator {
   filter: invert(1);
+}
+
+/* Touch-friendly tap targets */
+@media (max-width: 768px) {
+  button, 
+  a, 
+  input[type="checkbox"], 
+  input[type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Exception for inline elements */
+  .inline-touch {
+    min-height: auto;
+    min-width: auto;
+  }
+}
+
+/* Responsive modal */
+.modal-content {
+  @apply w-full max-w-lg mx-4 md:mx-auto;
+}
+
+/* Safe area for mobile devices */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }

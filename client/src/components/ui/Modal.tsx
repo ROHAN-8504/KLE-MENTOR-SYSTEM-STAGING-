@@ -17,7 +17,7 @@ const sizeClasses = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-xl',
-  full: 'max-w-4xl',
+  full: 'max-w-4xl w-full',
 };
 
 const Modal: React.FC<ModalProps> = ({
@@ -48,7 +48,7 @@ const Modal: React.FC<ModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50 animate-fade-in"
@@ -58,21 +58,23 @@ const Modal: React.FC<ModalProps> = ({
       {/* Modal Content */}
       <div
         className={cn(
-          'relative z-10 w-full mx-4 bg-background rounded-lg shadow-lg animate-slide-in-from-bottom',
+          'relative z-10 w-full mx-0 sm:mx-4 bg-background shadow-lg animate-slide-in-from-bottom',
+          'rounded-t-lg sm:rounded-lg', // Round top on mobile, all corners on desktop
+          'max-h-[90vh] overflow-y-auto', // Max height with scroll
           sizeClasses[size],
           className
         )}
       >
         {/* Header */}
         {(title || description) && (
-          <div className="flex flex-col space-y-1.5 p-6 pb-4">
+          <div className="flex flex-col space-y-1.5 p-4 sm:p-6 pb-2 sm:pb-4 sticky top-0 bg-background border-b sm:border-b-0">
             {title && (
-              <h2 className="text-lg font-semibold leading-none tracking-tight">
+              <h2 className="text-base sm:text-lg font-semibold leading-none tracking-tight pr-8">
                 {title}
               </h2>
             )}
             {description && (
-              <p className="text-sm text-muted-foreground">{description}</p>
+              <p className="text-xs sm:text-sm text-muted-foreground">{description}</p>
             )}
           </div>
         )}
@@ -80,14 +82,14 @@ const Modal: React.FC<ModalProps> = ({
         {/* Close button */}
         <button
           onClick={onClose}
-          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          className="absolute right-3 top-3 sm:right-4 sm:top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 p-1"
         >
-          <X className="h-4 w-4" />
+          <X className="h-5 w-5 sm:h-4 sm:w-4" />
           <span className="sr-only">Close</span>
         </button>
 
         {/* Content */}
-        <div className="p-6 pt-0">{children}</div>
+        <div className="p-4 sm:p-6 pt-2 sm:pt-0">{children}</div>
       </div>
     </div>
   );
