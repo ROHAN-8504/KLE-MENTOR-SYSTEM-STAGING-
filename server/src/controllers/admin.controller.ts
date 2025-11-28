@@ -12,59 +12,90 @@ import Interaction from '../models/Interaction';
 import Semester from '../models/Semester';
 import { emitNotification } from '../socket';
 
-// Dashboard statistics
+// Simple in-memory cache for dashboard stats (60 second TTL)
+const dashboardCache = new Map<string, { data: any; expiry: number }>();
+const DASHBOARD_CACHE_TTL = 60 * 1000;
+
+// Dashboard statistics - OPTIMIZED with caching and aggregation
 export const getDashboardStats = catchAsync(async (req: AuthRequest, res: Response) => {
-  const [
-    totalUsers,
-    totalMentors,
-    totalStudents,
-    totalGroups,
-    totalMeetings,
-    completedMeetings,
-    pendingMeetings,
-    totalPosts,
-  ] = await Promise.all([
-    User.countDocuments(),
-    User.countDocuments({ role: 'mentor' }),
-    User.countDocuments({ role: 'student' }),
-    Group.countDocuments(),
-    Meeting.countDocuments(),
-    Meeting.countDocuments({ status: 'completed' }),
-    Meeting.countDocuments({ status: 'scheduled' }),
-    Post.countDocuments(),
+  const cacheKey = 'admin_dashboard';
+  const cached = dashboardCache.get(cacheKey);
+  
+  if (cached && cached.expiry > Date.now()) {
+    return res.status(200).json({ success: true, data: cached.data });
+  }
+
+  // Use aggregation pipeline for user counts (single query instead of 3)
+  const [userStats, groupCount, meetingStats, postCount, recentActivity] = await Promise.all([
+    User.aggregate([
+      {
+        $group: {
+          _id: '$role',
+          count: { $sum: 1 }
+        }
+      }
+    ]),
+    Group.estimatedDocumentCount(), // Faster than countDocuments for large collections
+    Meeting.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]),
+    Post.estimatedDocumentCount(),
+    Log.find()
+      .select('user eventType eventDetail createdAt')
+      .populate('user', 'profile.firstName profile.lastName')
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean()
   ]);
 
-  // Recent activity
-  const recentActivity = await Log.find()
-    .populate('user', 'profile.firstName profile.lastName')
-    .sort({ createdAt: -1 })
-    .limit(10);
+  // Process aggregation results
+  const userCounts = userStats.reduce((acc: any, curr: any) => {
+    acc[curr._id] = curr.count;
+    return acc;
+  }, {});
+
+  const meetingCounts = meetingStats.reduce((acc: any, curr: any) => {
+    acc[curr._id] = curr.count;
+    return acc;
+  }, {});
+
+  const totalUsers = Object.values(userCounts).reduce((a: number, b: any) => a + b, 0) as number;
+
+  const responseData = {
+    users: {
+      total: totalUsers,
+      mentors: userCounts.mentor || 0,
+      students: userCounts.student || 0,
+      admins: userCounts.admin || 0,
+    },
+    groups: groupCount,
+    meetings: {
+      total: Object.values(meetingCounts).reduce((a: number, b: any) => a + b, 0) as number,
+      completed: meetingCounts.completed || 0,
+      pending: meetingCounts.scheduled || 0,
+    },
+    posts: postCount,
+    recentActivity,
+  };
+
+  // Cache the result
+  dashboardCache.set(cacheKey, { data: responseData, expiry: Date.now() + DASHBOARD_CACHE_TTL });
 
   res.status(200).json({
     success: true,
-    data: {
-      users: {
-        total: totalUsers,
-        mentors: totalMentors,
-        students: totalStudents,
-        admins: totalUsers - totalMentors - totalStudents,
-      },
-      groups: totalGroups,
-      meetings: {
-        total: totalMeetings,
-        completed: completedMeetings,
-        pending: pendingMeetings,
-      },
-      posts: totalPosts,
-      recentActivity,
-    },
+    data: responseData,
   });
 });
 
-// Get all users
+// Get all users - OPTIMIZED with lean queries and field projection
 export const getAllUsers = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50); // Cap at 50
   const skip = (page - 1) * limit;
   const { role, search, status } = req.query;
 
@@ -73,7 +104,6 @@ export const getAllUsers = catchAsync(async (req: AuthRequest, res: Response) =>
   if (role) query.role = role;
   if (status) query.status = status;
   if (search) {
-    // Sanitize search to prevent NoSQL injection
     const sanitizedSearch = sanitizeRegex(String(search));
     query.$or = [
       { 'profile.firstName': { $regex: sanitizedSearch, $options: 'i' } },
@@ -85,10 +115,11 @@ export const getAllUsers = catchAsync(async (req: AuthRequest, res: Response) =>
 
   const [users, total] = await Promise.all([
     User.find(query)
-      .select('-__v')
+      .select('profile.firstName profile.lastName email usn role status avatar createdAt')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     User.countDocuments(query),
   ]);
 
@@ -227,10 +258,10 @@ export const deleteUser = catchAsync(async (req: AuthRequest, res: Response) => 
   });
 });
 
-// Get all groups
+// Get all groups - OPTIMIZED with lean queries
 export const getAllGroups = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
   const skip = (page - 1) * limit;
   const { search, mentorId } = req.query;
 
@@ -238,18 +269,19 @@ export const getAllGroups = catchAsync(async (req: AuthRequest, res: Response) =
 
   if (mentorId) query.mentor = mentorId;
   if (search) {
-    // Sanitize search to prevent NoSQL injection
     const sanitizedSearch = sanitizeRegex(String(search));
     query.name = { $regex: sanitizedSearch, $options: 'i' };
   }
 
   const [groups, total] = await Promise.all([
     Group.find(query)
+      .select('name description mentor mentees createdAt')
       .populate('mentor', 'profile.firstName profile.lastName email')
       .populate('mentees', 'profile.firstName profile.lastName email usn')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Group.countDocuments(query),
   ]);
 

@@ -5,7 +5,7 @@ import User from '../models/User';
 import Log from '../models/Log';
 import { uploadToCloudinary, deleteFromCloudinary } from '../config/cloudinary';
 
-// Get current user profile
+// Get current user profile - Already optimized via auth middleware
 export const getProfile = catchAsync(async (req: AuthRequest, res: Response) => {
   res.status(200).json({
     success: true,
@@ -13,7 +13,7 @@ export const getProfile = catchAsync(async (req: AuthRequest, res: Response) => 
   });
 });
 
-// Update user profile
+// Update user profile - OPTIMIZED
 export const updateProfile = catchAsync(async (req: AuthRequest, res: Response) => {
   const allowedUpdates = [
     'profile', 'guardian', 'hostel', 'pastEducation'
@@ -48,13 +48,10 @@ export const updateProfile = catchAsync(async (req: AuthRequest, res: Response) 
     req.user._id,
     { $set: updates },
     { new: true, runValidators: true }
-  );
+  ).lean();
 
-  // Log profile update
-  await Log.create({
-    user: req.user._id,
-    eventType: 'PROFILE_UPDATED',
-  });
+  // Log profile update (fire and forget)
+  Log.create({ user: req.user._id, eventType: 'PROFILE_UPDATED' });
 
   res.status(200).json({
     success: true,
@@ -63,15 +60,15 @@ export const updateProfile = catchAsync(async (req: AuthRequest, res: Response) 
   });
 });
 
-// Upload avatar
+// Upload avatar - OPTIMIZED
 export const uploadAvatar = catchAsync(async (req: AuthRequest, res: Response) => {
   if (!req.file) {
     throw new AppError('Please upload an image', 400);
   }
 
-  // Delete old avatar if exists
+  // Delete old avatar if exists (fire and forget)
   if (req.user.avatar?.publicId) {
-    await deleteFromCloudinary(req.user.avatar.publicId);
+    deleteFromCloudinary(req.user.avatar.publicId).catch(() => {});
   }
 
   // Upload new avatar
@@ -87,13 +84,10 @@ export const uploadAvatar = catchAsync(async (req: AuthRequest, res: Response) =
       },
     },
     { new: true }
-  );
+  ).select('avatar').lean();
 
-  // Log avatar update
-  await Log.create({
-    user: req.user._id,
-    eventType: 'AVATAR_UPDATED',
-  });
+  // Log avatar update (fire and forget)
+  Log.create({ user: req.user._id, eventType: 'AVATAR_UPDATED' });
 
   res.status(200).json({
     success: true,
@@ -104,15 +98,18 @@ export const uploadAvatar = catchAsync(async (req: AuthRequest, res: Response) =
   });
 });
 
-// Delete avatar
+// Delete avatar - OPTIMIZED
 export const deleteAvatar = catchAsync(async (req: AuthRequest, res: Response) => {
+  // Delete from cloudinary (fire and forget)
   if (req.user.avatar?.publicId) {
-    await deleteFromCloudinary(req.user.avatar.publicId);
+    deleteFromCloudinary(req.user.avatar.publicId).catch(() => {});
   }
 
-  await User.findByIdAndUpdate(req.user._id, {
-    avatar: { url: '', publicId: undefined },
-  });
+  // Update user (fire and forget the DB update for speed)
+  User.updateOne(
+    { _id: req.user._id },
+    { avatar: { url: '', publicId: undefined } }
+  ).exec();
 
   res.status(200).json({
     success: true,
@@ -120,9 +117,11 @@ export const deleteAvatar = catchAsync(async (req: AuthRequest, res: Response) =
   });
 });
 
-// Get user by ID
+// Get user by ID - OPTIMIZED
 export const getUserById = catchAsync(async (req: AuthRequest, res: Response) => {
-  const user = await User.findById(req.params.id).select('-clerkId');
+  const user = await User.findById(req.params.id)
+    .select('profile avatar role email isProfileComplete')
+    .lean();
 
   if (!user) {
     throw new AppError('User not found', 404);

@@ -132,23 +132,31 @@ export const getGroupDetails = catchAsync(async (req: AuthRequest, res: Response
   });
 });
 
-// Get mentee details
+// Get mentee details - OPTIMIZED
 export const getMenteeDetails = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
+  const Semester = require('../models/Semester').default;
 
   // Verify mentor has access to this mentee
-  const group = await Group.findOne({ mentor: req.user._id, mentees: id });
+  const group = await Group.findOne({ mentor: req.user._id, mentees: id })
+    .select('_id name')
+    .lean();
 
   if (!group) {
     throw new AppError('Mentee not found in your groups', 404);
   }
 
   const [mentee, interactions, academicRecords] = await Promise.all([
-    User.findById(id).select('-clerkId'),
+    User.findById(id).select('-clerkId').lean(),
     Interaction.find({ studentId: id, mentorId: req.user._id })
+      .select('type description date outcome')
       .sort({ date: -1 })
-      .limit(10),
-    require('../models/Semester').default.find({ userId: id }).sort({ year: -1, semester: -1 }),
+      .limit(10)
+      .lean(),
+    Semester.find({ userId: id })
+      .select('semester year sgpa cgpa backlogs')
+      .sort({ year: -1, semester: -1 })
+      .lean(),
   ]);
 
   if (!mentee) {
@@ -161,20 +169,19 @@ export const getMenteeDetails = catchAsync(async (req: AuthRequest, res: Respons
       mentee,
       interactions,
       academicRecords,
-      group: {
-        _id: group._id,
-        name: group.name,
-      },
+      group,
     },
   });
 });
 
-// Record interaction with student
+// Record interaction with student - OPTIMIZED
 export const recordInteraction = catchAsync(async (req: AuthRequest, res: Response) => {
   const { studentId, type, description, date, outcome, followUpRequired, followUpDate, attachments } = req.body;
 
   // Verify mentor has access to this student
-  const group = await Group.findOne({ mentor: req.user._id, mentees: studentId });
+  const group = await Group.findOne({ mentor: req.user._id, mentees: studentId })
+    .select('_id')
+    .lean();
 
   if (!group) {
     throw new AppError('Student not found in your groups', 404);
@@ -193,8 +200,8 @@ export const recordInteraction = catchAsync(async (req: AuthRequest, res: Respon
     attachments,
   });
 
-  // Notify student - using Meeting contentModel as Interaction is not in enum
-  await Notification.create({
+  // Fire and forget: Notify student and log
+  Notification.create({
     type: 'MEETING_UPDATED',
     creator: req.user._id,
     content: interaction._id,
@@ -203,8 +210,7 @@ export const recordInteraction = catchAsync(async (req: AuthRequest, res: Respon
     receivers: [{ user: studentId, read: false }],
   });
 
-  // Log activity
-  await Log.create({
+  Log.create({
     user: req.user._id,
     eventType: 'RECORD_INTERACTION',
     entityType: 'Interaction',
@@ -220,10 +226,10 @@ export const recordInteraction = catchAsync(async (req: AuthRequest, res: Respon
   });
 });
 
-// Get interactions
+// Get interactions - OPTIMIZED
 export const getInteractions = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
   const skip = (page - 1) * limit;
   const { studentId, type, startDate, endDate } = req.query;
 
@@ -239,11 +245,13 @@ export const getInteractions = catchAsync(async (req: AuthRequest, res: Response
 
   const [interactions, total] = await Promise.all([
     Interaction.find(query)
+      .select('studentId groupId type description date outcome followUpRequired')
       .populate('studentId', 'profile.firstName profile.lastName usn')
       .populate('groupId', 'name')
       .sort({ date: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Interaction.countDocuments(query),
   ]);
 
@@ -302,7 +310,7 @@ export const deleteInteraction = catchAsync(async (req: AuthRequest, res: Respon
   });
 });
 
-// Get meeting attendance report
+// Get meeting attendance report - OPTIMIZED
 export const getAttendanceReport = catchAsync(async (req: AuthRequest, res: Response) => {
   const { groupId, studentId } = req.query;
 
@@ -310,8 +318,10 @@ export const getAttendanceReport = catchAsync(async (req: AuthRequest, res: Resp
   if (groupId) query.groupId = groupId;
 
   const meetings = await Meeting.find(query)
+    .select('title dateTime attendance')
     .populate('attendance.student', 'profile.firstName profile.lastName usn')
-    .sort({ dateTime: -1 });
+    .sort({ dateTime: -1 })
+    .lean();
 
   if (studentId) {
     // Filter attendance for specific student
@@ -349,18 +359,21 @@ export const getAttendanceReport = catchAsync(async (req: AuthRequest, res: Resp
   });
 });
 
-// Get mentee academic records
+// Get mentee academic records - OPTIMIZED
 export const getMenteeAcademicRecords = catchAsync(async (req: AuthRequest, res: Response) => {
   const { studentId } = req.params;
+  const Semester = require('../models/Semester').default;
 
-  // Verify access
-  const group = await Group.findOne({ mentor: req.user._id, mentees: studentId });
-  if (!group) {
+  // Verify access with minimal data
+  const groupExists = await Group.exists({ mentor: req.user._id, mentees: studentId });
+  if (!groupExists) {
     throw new AppError('Student not found in your groups', 403);
   }
 
-  const records = await require('../models/Semester').default.find({ userId: studentId })
-    .sort({ year: -1, semester: -1 });
+  const records = await Semester.find({ userId: studentId })
+    .select('semester year sgpa cgpa subjects backlogs achievements marksheet')
+    .sort({ year: -1, semester: -1 })
+    .lean();
 
   res.status(200).json({
     success: true,

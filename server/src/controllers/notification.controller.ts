@@ -3,10 +3,10 @@ import { AuthRequest } from '../middleware/auth';
 import { catchAsync, AppError } from '../middleware/errorHandler';
 import Notification from '../models/Notification';
 
-// Get user's notifications
+// Get user's notifications - OPTIMIZED
 export const getNotifications = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 20;
+  const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
   const skip = (page - 1) * limit;
   const { unreadOnly } = req.query;
 
@@ -19,21 +19,20 @@ export const getNotifications = catchAsync(async (req: AuthRequest, res: Respons
     };
   }
 
-  const [notifications, total] = await Promise.all([
+  // Use Promise.all for parallel queries
+  const [notifications, total, unreadCount] = await Promise.all([
     Notification.find(query)
+      .select('type creator content contentModel message receivers createdAt')
       .populate('creator', 'profile.firstName profile.lastName avatar')
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Notification.countDocuments(query),
+    Notification.countDocuments({
+      receivers: { $elemMatch: { user: req.user._id, read: false } }
+    }),
   ]);
-
-  // Count unread for this user
-  const unreadCount = await Notification.countDocuments({
-    receivers: {
-      $elemMatch: { user: req.user._id, read: false }
-    }
-  });
 
   // Transform notifications to include user's read status
   const transformedNotifications = notifications.map((notification: any) => {

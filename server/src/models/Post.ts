@@ -63,6 +63,7 @@ const postSchema = new Schema<IPost>(
 
 // Indexes
 postSchema.index({ groupId: 1, createdAt: -1 });
+postSchema.index({ groupId: 1, isPinned: -1, createdAt: -1 });
 postSchema.index({ author: 1 });
 
 export default mongoose.model<IPost>('Post', postSchema);

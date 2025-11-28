@@ -9,10 +9,27 @@ import Interaction from '../models/Interaction';
 import Semester from '../models/Semester';
 import { uploadToCloudinary, deleteFromCloudinary } from '../config/cloudinary';
 
-// Get student dashboard
+// Simple cache for student's group (5 min TTL)
+const groupCache = new Map<string, { data: any; expiry: number }>();
+const GROUP_CACHE_TTL = 5 * 60 * 1000;
+
+const getCachedGroup = async (userId: string) => {
+  const cached = groupCache.get(userId);
+  if (cached && cached.expiry > Date.now()) return cached.data;
+  
+  const group = await Group.findOne({ mentees: userId })
+    .populate('mentor', 'profile.firstName profile.lastName avatar email')
+    .lean();
+  
+  if (group) {
+    groupCache.set(userId, { data: group, expiry: Date.now() + GROUP_CACHE_TTL });
+  }
+  return group;
+};
+
+// Get student dashboard - OPTIMIZED
 export const getStudentDashboard = catchAsync(async (req: AuthRequest, res: Response) => {
-  const group = await Group.findOne({ mentees: req.user._id })
-    .populate('mentor', 'profile.firstName profile.lastName avatar email');
+  const group = await getCachedGroup(req.user._id.toString());
 
   if (!group) {
     return res.status(200).json({
@@ -26,50 +43,67 @@ export const getStudentDashboard = catchAsync(async (req: AuthRequest, res: Resp
     });
   }
 
-  const [upcomingMeetings, recentPosts, totalMeetings, attendedMeetings] = await Promise.all([
+  // Use aggregation for attendance calculation (faster than multiple queries)
+  const [upcomingMeetings, recentPosts, attendanceStats] = await Promise.all([
     Meeting.find({
       groupId: group._id,
       dateTime: { $gte: new Date() },
       status: 'scheduled',
     })
+      .select('title dateTime duration venue meetingType')
       .sort({ dateTime: 1 })
-      .limit(5),
+      .limit(5)
+      .lean(),
     Post.find({ groupId: group._id })
+      .select('title content isPinned createdAt author')
       .sort({ createdAt: -1 })
       .limit(5)
-      .populate('author', 'profile.firstName profile.lastName avatar'),
-    Meeting.countDocuments({ groupId: group._id, status: 'completed' }),
-    Meeting.countDocuments({
-      groupId: group._id,
-      status: 'completed',
-      'attendance.student': req.user._id,
-      'attendance.present': true,
-    }),
+      .populate('author', 'profile.firstName profile.lastName avatar')
+      .lean(),
+    Meeting.aggregate([
+      { $match: { groupId: group._id, status: 'completed' } },
+      { $unwind: { path: '$attendance', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: 1 },
+          attended: {
+            $sum: {
+              $cond: [
+                { $and: [
+                  { $eq: ['$attendance.student', req.user._id] },
+                  { $eq: ['$attendance.present', true] }
+                ]},
+                1, 0
+              ]
+            }
+          }
+        }
+      }
+    ])
   ]);
+
+  const stats = attendanceStats[0] || { total: 0, attended: 0 };
 
   res.status(200).json({
     success: true,
     data: {
-      group: {
-        _id: group._id,
-        name: group.name,
-      },
+      group: { _id: group._id, name: group.name },
       mentor: group.mentor,
       upcomingMeetings,
       recentPosts,
       attendance: {
-        total: totalMeetings,
-        attended: attendedMeetings,
-        percentage: totalMeetings > 0 ? ((attendedMeetings / totalMeetings) * 100).toFixed(2) : 0,
+        total: stats.total,
+        attended: stats.attended,
+        percentage: stats.total > 0 ? ((stats.attended / stats.total) * 100).toFixed(2) : 0,
       },
     },
   });
 });
 
-// Get my mentor
+// Get my mentor - OPTIMIZED
 export const getMyMentor = catchAsync(async (req: AuthRequest, res: Response) => {
-  const group = await Group.findOne({ mentees: req.user._id })
-    .populate('mentor', 'profile avatar email');
+  const group = await getCachedGroup(req.user._id.toString());
 
   if (!group) {
     throw new AppError('You are not assigned to any mentor yet', 404);
@@ -87,11 +121,13 @@ export const getMyMentor = catchAsync(async (req: AuthRequest, res: Response) =>
   });
 });
 
-// Get my group
+// Get my group - OPTIMIZED
 export const getMyGroup = catchAsync(async (req: AuthRequest, res: Response) => {
   const group = await Group.findOne({ mentees: req.user._id })
+    .select('name mentor mentees')
     .populate('mentor', 'profile.firstName profile.lastName avatar email')
-    .populate('mentees', 'profile.firstName profile.lastName avatar usn');
+    .populate('mentees', 'profile.firstName profile.lastName avatar usn')
+    .lean();
 
   if (!group) {
     throw new AppError('You are not assigned to any group yet', 404);
@@ -103,14 +139,14 @@ export const getMyGroup = catchAsync(async (req: AuthRequest, res: Response) => 
   });
 });
 
-// Get my meetings
+// Get my meetings - OPTIMIZED
 export const getMyMeetings = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
   const skip = (page - 1) * limit;
   const { status } = req.query;
 
-  const group = await Group.findOne({ mentees: req.user._id });
+  const group = await getCachedGroup(req.user._id.toString());
 
   if (!group) {
     return res.status(200).json({
@@ -127,10 +163,12 @@ export const getMyMeetings = catchAsync(async (req: AuthRequest, res: Response) 
 
   const [meetings, total] = await Promise.all([
     Meeting.find(query)
+      .select('title dateTime duration venue meetingType meetingLink status scheduledBy')
       .populate('scheduledBy', 'profile.firstName profile.lastName')
       .sort({ dateTime: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Meeting.countDocuments(query),
   ]);
 
@@ -148,9 +186,9 @@ export const getMyMeetings = catchAsync(async (req: AuthRequest, res: Response) 
   });
 });
 
-// Get my attendance
+// Get my attendance - OPTIMIZED
 export const getMyAttendance = catchAsync(async (req: AuthRequest, res: Response) => {
-  const group = await Group.findOne({ mentees: req.user._id });
+  const group = await getCachedGroup(req.user._id.toString());
 
   if (!group) {
     return res.status(200).json({
@@ -165,7 +203,10 @@ export const getMyAttendance = catchAsync(async (req: AuthRequest, res: Response
   const meetings = await Meeting.find({
     groupId: group._id,
     status: 'completed',
-  }).sort({ dateTime: -1 });
+  })
+    .select('title dateTime attendance')
+    .sort({ dateTime: -1 })
+    .lean();
 
   const attendance = meetings.map((m: any) => {
     const myAttendance = m.attendance.find(
@@ -194,18 +235,20 @@ export const getMyAttendance = catchAsync(async (req: AuthRequest, res: Response
   });
 });
 
-// Get my interactions with mentor
+// Get my interactions with mentor - OPTIMIZED
 export const getMyInteractions = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
-  const limit = parseInt(req.query.limit as string) || 10;
+  const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
   const skip = (page - 1) * limit;
 
   const [interactions, total] = await Promise.all([
     Interaction.find({ studentId: req.user._id })
+      .select('mentorId date type notes')
       .populate('mentorId', 'profile.firstName profile.lastName')
       .sort({ date: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Interaction.countDocuments({ studentId: req.user._id }),
   ]);
 
@@ -223,12 +266,12 @@ export const getMyInteractions = catchAsync(async (req: AuthRequest, res: Respon
   });
 });
 
-// Manage academic records (Semester)
+// Manage academic records (Semester) - OPTIMIZED
 export const getMyAcademicRecords = catchAsync(async (req: AuthRequest, res: Response) => {
-  const records = await Semester.find({ userId: req.user._id }).sort({
-    year: -1,
-    semester: -1,
-  });
+  const records = await Semester.find({ userId: req.user._id })
+    .select('semester year sgpa cgpa backlogs achievements marksheet')
+    .sort({ year: -1, semester: -1 })
+    .lean();
 
   res.status(200).json({
     success: true,
@@ -343,12 +386,12 @@ export const uploadMarksheet = catchAsync(async (req: AuthRequest, res: Response
   });
 });
 
-// Get group mates
+// Get group mates - OPTIMIZED
 export const getGroupMates = catchAsync(async (req: AuthRequest, res: Response) => {
-  const group = await Group.findOne({ mentees: req.user._id }).populate(
-    'mentees',
-    'profile.firstName profile.lastName avatar usn email'
-  );
+  const group = await Group.findOne({ mentees: req.user._id })
+    .select('mentees')
+    .populate('mentees', 'profile.firstName profile.lastName avatar usn email')
+    .lean();
 
   if (!group) {
     throw new AppError('You are not assigned to any group yet', 404);
