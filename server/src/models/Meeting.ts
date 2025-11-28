@@ -108,5 +108,7 @@ const meetingSchema = new Schema<IMeeting>(
 meetingSchema.index({ scheduledBy: 1, dateTime: -1 });
 meetingSchema.index({ groupId: 1, dateTime: -1 });
 meetingSchema.index({ status: 1, dateTime: 1 });
+// Compound index to speed up queries that filter by group/status and sort by dateTime
+meetingSchema.index({ groupId: 1, status: 1, dateTime: -1 });
 
 export default mongoose.model<IMeeting>('Meeting', meetingSchema);

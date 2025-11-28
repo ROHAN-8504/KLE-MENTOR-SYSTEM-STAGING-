@@ -40,6 +40,10 @@ export const clearGroupCache = (userId: string) => {
   }
 };
 
+// Simple in-memory cache for meeting stats
+const statsCache = new Map<string, { data: any; expiry: number }>();
+const STATS_TTL = 60 * 1000; // 1 minute
+
 // Get meetings (filtered by role) - OPTIMIZED
 export const getMeetings = catchAsync(async (req: AuthRequest, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
@@ -214,8 +218,10 @@ export const createMeeting = catchAsync(async (req: AuthRequest, res: Response) 
 export const getMeeting = catchAsync(async (req: AuthRequest, res: Response) => {
   const { id } = req.params;
 
+  // Select only required fields and avoid populating full mentee lists (can be large)
   const meeting = await Meeting.findById(id)
-    .populate('groupId', 'name mentor mentees')
+    .select('title description dateTime duration venue meetingType meetingLink status groupId scheduledBy attendance')
+    .populate('groupId', 'name mentor') // only mentor id is needed here
     .populate('scheduledBy', 'profile.firstName profile.lastName')
     .populate('attendance.student', 'profile.firstName profile.lastName usn')
     .lean();
@@ -224,10 +230,16 @@ export const getMeeting = catchAsync(async (req: AuthRequest, res: Response) => 
 
   // Verify access using populated data (no extra query needed)
   if (req.user.role !== 'admin') {
-    const group = meeting.groupId as any;
-    const isMentor = group.mentor?.toString() === req.user._id.toString();
-    const isMentee = group.mentees?.some((m: any) => m.toString() === req.user._id.toString());
-    
+    const groupRef = meeting.groupId as any;
+    const isMentor = groupRef?.mentor?.toString() === req.user._id.toString();
+    let isMentee = false;
+
+    if (!isMentor) {
+      // Check membership efficiently without fetching full mentee array
+      const member = await Group.exists({ _id: groupRef._id, mentees: req.user._id });
+      isMentee = Boolean(member);
+    }
+
     if (!isMentor && !isMentee) {
       throw new AppError('Access denied', 403);
     }
@@ -409,16 +421,25 @@ export const getMeetingStats = catchAsync(async (req: AuthRequest, res: Response
   if (groupId) {
     matchQuery.groupId = groupId;
   } else if (req.user.role !== 'admin') {
-    const groups = await Group.find({
-      $or: [{ mentor: req.user._id }, { mentees: req.user._id }],
-    });
-    matchQuery.groupId = { $in: groups.map((g) => g._id) };
+    // Use cached group ids to avoid extra DB load
+    const groupIds = await getCachedGroupIds(req.user._id.toString(), req.user.role);
+    if (groupIds.length === 0) {
+      return res.status(200).json({ success: true, data: { total: 0 } });
+    }
+    matchQuery.groupId = { $in: groupIds };
   }
 
   if (startDate || endDate) {
     matchQuery.dateTime = {};
     if (startDate) matchQuery.dateTime.$gte = new Date(startDate as string);
     if (endDate) matchQuery.dateTime.$lte = new Date(endDate as string);
+  }
+
+  // Try cache key first
+  const cacheKey = JSON.stringify({ matchQuery, startDate, endDate });
+  const cached = statsCache.get(cacheKey);
+  if (cached && cached.expiry > Date.now()) {
+    return res.status(200).json({ success: true, data: cached.data });
   }
 
   const stats = await Meeting.aggregate([
@@ -437,11 +458,8 @@ export const getMeetingStats = catchAsync(async (req: AuthRequest, res: Response
     return acc;
   }, {} as Record<string, number>);
 
-  res.status(200).json({
-    success: true,
-    data: {
-      total: totalMeetings,
-      ...statusCounts,
-    },
-  });
+  const result = { total: totalMeetings, ...statusCounts };
+  statsCache.set(cacheKey, { data: result, expiry: Date.now() + STATS_TTL });
+
+  return res.status(200).json({ success: true, data: result });
 });
