@@ -2,6 +2,8 @@ import { io, Socket } from 'socket.io-client';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
 
+console.log('Socket URL:', SOCKET_URL); // Debug log
+
 let socket: Socket | null = null;
 
 export const initSocket = (token: string): Socket => {
@@ -15,6 +17,8 @@ export const initSocket = (token: string): Socket => {
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 1000,
+    timeout: 20000,
+    withCredentials: true,
   });
 
   socket.on('connect', () => {

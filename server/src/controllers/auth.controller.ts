@@ -9,6 +9,8 @@ import Log from '../models/Log';
 export const selectRole = catchAsync(async (req: AuthRequest, res: Response) => {
   const { role, adminKey } = req.body;
 
+  console.log('Select role called:', { role, userId: req.auth?.userId });
+
   if (!req.auth?.userId) {
     throw new AppError('Authentication required', 401);
   }
@@ -19,6 +21,7 @@ export const selectRole = catchAsync(async (req: AuthRequest, res: Response) => 
   
   if (role === 'admin') {
     const expectedAdminKey = process.env.ADMIN_SECRET_KEY;
+    console.log('Admin key check:', { provided: !!adminKey, expected: !!expectedAdminKey });
     if (!expectedAdminKey || adminKey !== expectedAdminKey) {
       throw new AppError('Invalid admin key', 403);
     }
@@ -40,13 +43,20 @@ export const selectRole = catchAsync(async (req: AuthRequest, res: Response) => 
   }
 
   // Fetch user details from Clerk
-  const clerkUser = await clerkClient.users.getUser(req.auth.userId);
+  let clerkUser;
+  try {
+    clerkUser = await clerkClient.users.getUser(req.auth.userId);
+  } catch (clerkError: any) {
+    console.error('Clerk getUser error:', clerkError.message);
+    throw new AppError('Could not fetch user details from authentication service', 500);
+  }
+
   const email = clerkUser.emailAddresses[0]?.emailAddress;
   const firstName = clerkUser.firstName;
   const lastName = clerkUser.lastName;
 
-  if (!email || !firstName) {
-    throw new AppError('Could not retrieve user details from Clerk', 500);
+  if (!email) {
+    throw new AppError('Email not found in authentication service', 500);
   }
 
   // Create user in database
@@ -55,7 +65,7 @@ export const selectRole = catchAsync(async (req: AuthRequest, res: Response) => 
     email: email,
     role: role,
     profile: {
-      firstName: firstName,
+      firstName: firstName || email.split('@')[0],
       lastName: lastName || '',
     },
     avatar: {
@@ -64,20 +74,31 @@ export const selectRole = catchAsync(async (req: AuthRequest, res: Response) => 
     isSuperAdmin: isSuperAdmin,
   });
 
+  console.log('User created:', user._id);
+
   // Update Clerk user metadata with role
-  await clerkClient.users.updateUserMetadata(req.auth.userId, {
-    publicMetadata: {
-      role: role,
-      dbId: user._id.toString(),
-    },
-  });
+  try {
+    await clerkClient.users.updateUserMetadata(req.auth.userId, {
+      publicMetadata: {
+        role: role,
+        dbId: user._id.toString(),
+      },
+    });
+  } catch (metadataError: any) {
+    console.error('Failed to update Clerk metadata:', metadataError.message);
+    // Don't fail the request, just log the error
+  }
 
   // Log the signup
-  await Log.create({
-    user: user._id,
-    eventType: 'SIGNUP',
-    eventDetail: `New ${role} registered`,
-  });
+  try {
+    await Log.create({
+      user: user._id,
+      eventType: 'SIGNUP',
+      eventDetail: `New ${role} registered`,
+    });
+  } catch (logError: any) {
+    console.error('Failed to create log:', logError.message);
+  }
 
   res.status(201).json({
     success: true,

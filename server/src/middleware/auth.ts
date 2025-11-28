@@ -27,9 +27,15 @@ export const authMiddleware = async (
     const token = authHeader.split(' ')[1];
 
     // Verify token with Clerk
-    const sessionClaims = await clerkClient.verifyToken(token);
+    let sessionClaims;
+    try {
+      sessionClaims = await clerkClient.verifyToken(token);
+    } catch (clerkError: any) {
+      console.error('Clerk token verification error:', clerkError.message);
+      throw new AppError('Invalid or expired token', 401);
+    }
 
-    if (!sessionClaims) {
+    if (!sessionClaims || !sessionClaims.sub) {
       throw new AppError('Invalid token', 401);
     }
 
@@ -51,6 +57,7 @@ export const authMiddleware = async (
 
     next();
   } catch (error: any) {
+    console.error('Auth middleware error:', error.message);
     if (error instanceof AppError) {
       return res.status(error.statusCode).json({
         success: false,
@@ -60,6 +67,7 @@ export const authMiddleware = async (
     return res.status(401).json({
       success: false,
       message: 'Authentication failed',
+      error: process.env.NODE_ENV !== 'production' ? error.message : undefined,
     });
   }
 };

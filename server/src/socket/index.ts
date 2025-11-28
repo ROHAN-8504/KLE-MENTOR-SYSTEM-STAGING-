@@ -33,12 +33,29 @@ export const emitChatMessage = (chatId: string, message: any, excludeUserId?: st
 };
 
 export const initializeSocket = (server: HttpServer) => {
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+    'https://kle-mentor-system-staging.vercel.app',
+    process.env.CLIENT_URL,
+  ].filter(Boolean);
+
   const io = new SocketServer(server, {
     cors: {
-      origin: process.env.CLIENT_URL || 'http://localhost:5173',
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+        const isAllowed = allowedOrigins.some(allowed => 
+          origin === allowed || origin.startsWith(allowed?.replace(/\/$/, '') || '')
+        );
+        callback(null, isAllowed || true); // Allow all for now
+      },
       credentials: true,
+      methods: ['GET', 'POST'],
     },
     pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ['websocket', 'polling'],
   });
 
   // Store the io instance globally

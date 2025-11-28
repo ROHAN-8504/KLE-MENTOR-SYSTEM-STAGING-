@@ -3,6 +3,8 @@ import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api/v1';
 
+console.log('API URL:', API_URL); // Debug log
+
 // Extend Window interface for Clerk
 declare global {
   interface Window {
@@ -20,15 +22,20 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true,
+  timeout: 30000, // 30 second timeout
 });
 
 // Request interceptor to add auth token
 api.interceptors.request.use(
   async (config) => {
-    // Get token from Clerk
-    const token = await window.Clerk?.session?.getToken();
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    try {
+      // Get token from Clerk
+      const token = await window.Clerk?.session?.getToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+    } catch (error) {
+      console.error('Error getting auth token:', error);
     }
     return config;
   },
@@ -41,12 +48,20 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Network error
+    if (!error.response) {
+      console.error('Network error:', error.message);
+      return Promise.reject(new Error('Network error. Please check your connection.'));
+    }
+    
     const message = error.response?.data?.message || error.message || 'Something went wrong';
     
     // Handle specific error codes
     if (error.response?.status === 401) {
-      // Redirect to login if unauthorized
-      window.location.href = '/sign-in';
+      // Only redirect if not already on auth pages
+      if (!window.location.pathname.includes('/sign-in') && !window.location.pathname.includes('/sign-up')) {
+        window.location.href = '/sign-in';
+      }
     }
     
     return Promise.reject(new Error(message));
