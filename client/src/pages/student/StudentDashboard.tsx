@@ -52,19 +52,19 @@ export const StudentDashboard: React.FC = () => {
   // Not assigned to any group yet
   if (data?.message || !data?.mentor) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-4 md:space-y-6">
         <div>
-          <h1 className="text-3xl font-bold">Student Dashboard</h1>
-          <p className="text-muted-foreground mt-1">
+          <h1 className="text-2xl md:text-3xl font-bold">Student Dashboard</h1>
+          <p className="text-muted-foreground mt-1 text-sm md:text-base">
             Welcome to the KLE Mentor System
           </p>
         </div>
 
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <User className="h-16 w-16 text-muted-foreground mb-4" />
-            <h2 className="text-xl font-semibold mb-2">No Mentor Assigned Yet</h2>
-            <p className="text-muted-foreground text-center max-w-md">
+          <CardContent className="flex flex-col items-center justify-center py-8 md:py-12 px-4">
+            <User className="h-12 w-12 md:h-16 md:w-16 text-muted-foreground mb-4" />
+            <h2 className="text-lg md:text-xl font-semibold mb-2 text-center">No Mentor Assigned Yet</h2>
+            <p className="text-muted-foreground text-center text-sm md:text-base max-w-md">
               You haven't been assigned to a mentor group yet. Please wait for an administrator to assign you to a group.
             </p>
           </CardContent>
@@ -74,16 +74,16 @@ export const StudentDashboard: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Student Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
+        <h1 className="text-2xl md:text-3xl font-bold">Student Dashboard</h1>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">
           Welcome back! Here's your mentorship overview.
         </p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">My Group</CardTitle>

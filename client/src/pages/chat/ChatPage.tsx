@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Search, Send, MessageSquare, Check, CheckCheck } from 'lucide-react';
+import { Search, Send, MessageSquare, Check, CheckCheck, ArrowLeft } from 'lucide-react';
 import { chatAPI } from '../../lib/api';
 import { Input } from '../../components/ui/Input';
 import { Button } from '../../components/ui/Button';
@@ -25,6 +25,7 @@ export const ChatPage: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [showChatList, setShowChatList] = useState(true);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,6 +144,12 @@ export const ChatPage: React.FC = () => {
     setSelectedChat(chat);
     fetchMessages(chat._id);
     setTypingUsers([]);
+    setShowChatList(false); // Hide chat list on mobile when selecting a chat
+  };
+
+  const handleBackToList = () => {
+    setShowChatList(true);
+    setSelectedChat(null);
   };
 
   const handleSendMessage = async (e: React.FormEvent) => {
@@ -197,9 +204,13 @@ export const ChatPage: React.FC = () => {
   });
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] bg-card rounded-lg border overflow-hidden">
-      <div className="w-80 border-r flex flex-col">
-        <div className="p-4 border-b">
+    <div className="flex h-[calc(100vh-8rem)] md:h-[calc(100vh-8rem)] bg-card rounded-lg border overflow-hidden">
+      {/* Chat List - Hidden on mobile when chat is selected */}
+      <div className={cn(
+        "w-full md:w-80 border-r flex flex-col",
+        !showChatList && "hidden md:flex"
+      )}>
+        <div className="p-3 md:p-4 border-b">
           <h2 className="text-lg font-semibold mb-3">Messages</h2>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -269,22 +280,34 @@ export const ChatPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col">
+      {/* Chat Content - Full width on mobile */}
+      <div className={cn(
+        "flex-1 flex flex-col",
+        showChatList && "hidden md:flex"
+      )}>
         {selectedChat ? (
           <>
-            <div className="p-4 border-b flex items-center justify-between">
+            <div className="p-3 md:p-4 border-b flex items-center justify-between gap-3">
+              {/* Back button for mobile */}
+              <button
+                onClick={handleBackToList}
+                className="md:hidden p-2 -ml-2 rounded-lg hover:bg-accent"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
               {(() => {
                 const participant = getChatParticipant(selectedChat);
                 return participant ? (
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
                     <Avatar
                       src={participant.avatar}
                       firstName={participant.profile?.firstName}
                       lastName={participant.profile?.lastName}
                       size="md"
+                      className="shrink-0"
                     />
-                    <div>
-                      <p className="font-medium">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">
                         {getFullName(participant.profile?.firstName, participant.profile?.lastName)}
                       </p>
                       <p className="text-xs text-muted-foreground capitalize">
@@ -388,8 +411,8 @@ export const ChatPage: React.FC = () => {
               )}
             </div>
 
-            <div className="p-4 border-t">
-              <form onSubmit={handleSendMessage} className="flex items-center gap-3">
+            <div className="p-3 md:p-4 border-t">
+              <form onSubmit={handleSendMessage} className="flex items-center gap-2 md:gap-3">
                 <Input
                   placeholder="Type a message..."
                   value={newMessage}
@@ -399,7 +422,7 @@ export const ChatPage: React.FC = () => {
                   }}
                   className="flex-1"
                 />
-                <Button type="submit" disabled={!newMessage.trim() || sending}>
+                <Button type="submit" disabled={!newMessage.trim() || sending} size="icon" className="shrink-0">
                   <Send className="h-4 w-4" />
                 </Button>
               </form>

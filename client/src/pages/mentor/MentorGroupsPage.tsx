@@ -44,10 +44,10 @@ export const MentorGroupsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">My Groups</h1>
-        <p className="text-muted-foreground mt-1">
+        <h1 className="text-2xl md:text-3xl font-bold">My Groups</h1>
+        <p className="text-muted-foreground mt-1 text-sm md:text-base">
           Manage your mentoring groups and mentees
         </p>
       </div>

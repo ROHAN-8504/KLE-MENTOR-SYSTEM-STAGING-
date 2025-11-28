@@ -58,7 +58,7 @@ const DropdownItem = React.forwardRef<HTMLDivElement, DropdownItemProps>(
     <div
       ref={ref}
       className={cn(
-        'relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground',
+        'relative flex cursor-pointer select-none items-center rounded-sm px-3 py-2 md:px-2 md:py-1.5 text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground min-h-[44px] md:min-h-0',
         destructive && 'text-destructive hover:bg-destructive/10',
         className
       )}
